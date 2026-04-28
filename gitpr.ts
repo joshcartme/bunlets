@@ -23,20 +23,55 @@ const getOriginUrl = async () => {
 	return url.replace(/\.git$/, "");
 };
 
-const getBasebranch = async () => {
-	// origin/HEAD -> origin/main
-	const branchInfo = await $` git branch -r --list 'origin/HEAD'`.text();
-	const branch = branchInfo
-		.split(" ")
-		.pop() // origin/main
-		?.split("/")
-		.pop() // main
-		?.trim();
-	if (!branch) {
-		console.error("Could not determine base branch.");
-		process.exit(1);
+const getBasebranch = async (): Promise<string> => {
+	const tryRev = async (name: string) => {
+		for (const ref of [`origin/${name}`, name]) {
+			try {
+				const out = (await $`git rev-parse --verify ${ref}`.text()).trim();
+				if (out) {
+					return ref;
+				}
+			} catch {
+				/* ref missing */
+			}
+		}
+		return null;
+	};
+
+	// 1. origin/HEAD (works after clone, or after: git remote set-head origin -a)
+	try {
+		const abbrev = (
+			await $`git rev-parse --abbrev-ref origin/HEAD`.text()
+		).trim();
+		const name = abbrev.replace(/^origin\//, "");
+		if (name && name !== "HEAD") {
+			return name;
+		}
+	} catch {
+		/* no origin/HEAD */
 	}
-	return branch;
+
+	// 2. Git 2.28+ configured default for new repos
+	try {
+		const d = (await $`git config --get init.defaultBranch`.text()).trim();
+		if (d && (await tryRev(d))) {
+			return d;
+		}
+	} catch {
+		/* unset */
+	}
+
+	// 3. Usual remote or local branch names (no symbolic ref needed)
+	for (const name of ["main", "master", "trunk", "develop"]) {
+		if (await tryRev(name)) {
+			return name;
+		}
+	}
+
+	console.error(
+		"Could not determine base branch. Try: git fetch origin && git remote set-head origin -a",
+	);
+	process.exit(1);
 };
 
 const getCurrentBranch = async () =>
